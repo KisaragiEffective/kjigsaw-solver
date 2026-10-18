@@ -1,0 +1,11 @@
+[package]
+name = "kzigsaw-solver-parallelization"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kzigsaw-solver-core = { path = "../kzigsaw-solver-core" }
+rayon = "1.11"
+
+[dev-dependencies]
+image.workspace = true

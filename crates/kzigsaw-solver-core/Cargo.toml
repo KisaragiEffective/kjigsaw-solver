@@ -1,0 +1,8 @@
+[package]
+name = "kzigsaw-solver-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+image.workspace = true
+serde.workspace = true
