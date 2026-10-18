@@ -260,3 +260,54 @@ fn rounding_requires_explicit_cut_and_preserves_complete_pieces() {
         Some(2)
     );
 }
+
+#[test]
+fn strategies_and_default_apply_all() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("input.png");
+    let output = dir.path().join("output.png");
+    let original = RgbaImage::from_fn(12, 8, |x, y| {
+        Rgba([(x * 7) as u8, (y * 9) as u8, 0, (x + y) as u8])
+    });
+    let puzzle = kzigsaw_solver_core::Puzzle::new(&original, 4, 4).unwrap();
+    puzzle
+        .render(&[5, 4, 3, 2, 1, 0])
+        .unwrap()
+        .save(&input)
+        .unwrap();
+    let mut explicit_default = None;
+    for strategy in ["fast", "slower", "apply-all"] {
+        let result = solve(
+            &input,
+            &output,
+            &[
+                "--strategy",
+                strategy,
+                "--solved-information-output-format",
+                "json",
+            ],
+        );
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(image::open(&output).unwrap().to_rgba8(), original);
+        if strategy == "apply-all" {
+            explicit_default = Some(result.stdout);
+        }
+    }
+    let result = solve(
+        &input,
+        &output,
+        &["--solved-information-output-format", "json"],
+    );
+    assert!(result.status.success());
+    assert_eq!(result.stdout, explicit_default.unwrap());
+    assert_eq!(
+        solve(&input, &output, &["--strategy", "unknown"])
+            .status
+            .code(),
+        Some(2)
+    );
+}

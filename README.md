@@ -12,6 +12,7 @@
 * `kzigsaw-solver-cli help`: ヘルプを表示。
 * `kzigsaw-solver-cli detect-edge`: エッジを検出。
 * `kzigsaw-solver-cli solve`: パズルを並び替える。
+    * `--strategy [fast/slower/apply-all]`: 探索方式。既定は `apply-all`。
     * `--assume-all-pieces-are-same-shape`: 必須。将来の一般化に向けて意味のないフラグとして作成。
     * `--assume-all-pieces-are-rectangle`: 必須。将来の一般化に向けて意味のないフラグとして作成。
     * `--assume-no-padding`: 必須。将来の一般化に向けて意味のないフラグとして作成。
@@ -60,6 +61,7 @@ webapp は将来の実装予定で、今回の workspace には含まない。
 
 ```sh
 ./target/release/kzigsaw-solver-cli solve \
+  --strategy apply-all \
   --assume-all-pieces-are-same-shape \
   --assume-all-pieces-are-rectangle \
   --assume-no-padding \
@@ -118,6 +120,16 @@ JSON は単一入力でも配列で返す。各要素は次の形式（以下は
 
 ## 探索方式と制限
 
+`--strategy` で探索方式を切り替える。
+
+| strategy | 動作 |
+| --- | --- |
+| `fast` | 従来の境界色・勾配の評価、ビーム探索、ピース群の結合、交換による局所改善。 |
+| `slower` | 全ピース対の境界画素ごとに勾配の許容範囲を検査し、候補の隣接関係から配置を構築する。 |
+| `apply-all`（既定） | `fast` を実行後、`slower` の境界評価で照合する。再構成により勾配評価の合計が改善する不一致があれば配置を修正し、改善しない場合は fast の結果を保持する。 |
+
+### fast
+
 RGB の境界画素の二乗色差と、境界をまたぐ勾配の不連続を評価する。
 色差の重みは1、勾配差は0.5。寸法1の軸は色差だけで評価する。
 全ピース対の隣接コストを Rayon で並列計算した後、幅64のビーム探索で配置する。
@@ -133,6 +145,21 @@ RGB の境界画素の二乗色差と、境界をまたぐ勾配の不連続を�
 透明度は評価に使わないため、透明部分の RGB も評価に影響する。
 隣接表のメモリはピース数 N に対して約 `16 * N * N` バイト、境界比較の計算量も二乗で増える。
 ピース群の結合でも二乗個の隣接候補を保持するため、実際の使用メモリは隣接表より大きい。
+
+### slower / apply-all の勾配照合
+
+境界を挟む RGB の色差を `gap`、両側のピース内部の隣接画素から得られる勾配を `g1`, `g2` とし、
+境界の全画素・全チャンネルで `|gap - (g1 + g2) / 2| <= 4 * (16 + |g1| + |g2|)` を検査する。
+8-bit RGB 値を用い、テクスチャの強い箇所では許容幅を広くする。
+境界内の勾配の平均と色チャンネル間の共分散でも評価し、共分散の対角に9を加えて単色部でも計算可能にする。
+照合は Rayon で並列計算する。
+
+許容範囲内の組み合わせから、第2候補とのコスト比が0.9未満になる明確な候補を優先してピース群を結合する。
+結合時はピースの重複と画像の行列数を超える配置を拒否する。
+最大のピース群を配置の軸とし、残りは配置済みの隣接ピースが多い場所から境界評価で補完する。
+候補が不足する場合も全ピースを出力するが、許容範囲外の境界には画素・チャンネルの違反ごとに1000のペナルティを課す。
+`slower` も近似探索であり、すべての画像での復元は保証しない。1画素のピースでは内部勾配を得られない。
+復元処理が元画像やファイル名による正解情報を参照することはない。
 
 ## 検証
 
@@ -157,3 +184,22 @@ PNG/JPEG 入出力、複数入力、JSON とテキストの移動情報、引数
 
 周期的な模様は現在の探索では大きく誤配置する例である。上記の数値は入力と実行環境に依存し、
 写真一般の精度や性能を保証しない。各画像で結果を確認すること。
+
+上の合成画像ベンチマークは core の従来の `fast` 探索を計測している。
+
+### commons/1 の SSIM 回帰テスト
+
+`test_vectors/commons/1/shuffled/` の8枚を64×64画素、`--piece-rounding-policy cut`、
+`--strategy slower` で復元する任意実行のテストを用意している。
+`~/.local/bin/magick compare -metric SSIM original.jpg 復元画像.png null:` で比較し、各画像が0.9000以上であることを検証する。
+元画像3840×1869画素に対して出力は3840×1856画素となるが、比較対象は切り抜かず元JPEGを直接渡す。
+
+```sh
+KZIGSAW_TEST_OUTPUT_DIR=test_vectors/commons/1/result-slower \
+  cargo test --release -p kzigsaw-solver-cli --test commons -- --ignored --nocapture
+```
+
+`KZIGSAW_TEST_OUTPUT_DIR` を省略すると一時ディレクトリを使う。
+指定時は復元PNG、移動情報JSON、`ssim.txt` を保存する。
+開発環境での実測（2026-10-19）は **8枚すべて SSIM 0.990776**。
+通常の `cargo test --workspace` では、外部の画像データと ImageMagick が必要なこのテストはスキップする。

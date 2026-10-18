@@ -1,7 +1,9 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use image::{ImageFormat, ImageReader, RgbaImage};
-use kzigsaw_solver_core::{DimensionCandidate, Puzzle, detect_edges, solve};
-use kzigsaw_solver_parallelization::compute_costs;
+use kzigsaw_solver_core::{
+    DimensionCandidate, Puzzle, detect_edges, refine_with_gradients, solve, solve_slower,
+};
+use kzigsaw_solver_parallelization::{compute_costs, compute_gradient_costs};
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -38,8 +40,20 @@ enum PieceRoundingPolicy {
     Cut,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum Strategy {
+    /// Original boundary-color beam search and swap refinement.
+    Fast,
+    /// Enumerate per-pixel gradient-compatible neighbors and assemble a grid.
+    Slower,
+    /// Run fast, then repair if gradient reconstruction improves its boundaries.
+    ApplyAll,
+}
+
 #[derive(Args)]
 struct SolveArgs {
+    #[arg(long, value_enum, default_value = "apply-all")]
+    strategy: Strategy,
     #[arg(long, required = true)]
     assume_all_pieces_are_same_shape: bool,
     #[arg(long, required = true)]
@@ -199,8 +213,15 @@ fn solve_command(args: SolveArgs) -> Result<(), String> {
             input.display(),
             puzzle.piece_count()
         );
-        let costs = compute_costs(puzzle)?;
-        let order = solve(puzzle, &costs)?;
+        let order = match args.strategy {
+            Strategy::Fast => solve(puzzle, &compute_costs(puzzle)?)?,
+            Strategy::Slower => solve_slower(puzzle, &compute_gradient_costs(puzzle)?)?,
+            Strategy::ApplyAll => {
+                let fast = solve(puzzle, &compute_costs(puzzle)?)?;
+                let gradient_costs = compute_gradient_costs(puzzle)?;
+                refine_with_gradients(puzzle, &gradient_costs, fast)?
+            }
+        };
         puzzle
             .render(&order)?
             .save_with_format(output, ImageFormat::Png)

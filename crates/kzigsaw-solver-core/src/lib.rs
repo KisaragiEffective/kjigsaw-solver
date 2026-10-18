@@ -1,6 +1,8 @@
 //! Rectangular jigsaw reconstruction without rotation or reflection.
 use image::{RgbaImage, imageops};
 use serde::Serialize;
+mod gradient;
+pub use gradient::{GradientModel, refine_with_gradients, solve_slower};
 
 #[derive(Clone)]
 pub struct Puzzle {
